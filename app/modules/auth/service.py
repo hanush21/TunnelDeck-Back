@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 import firebase_admin
@@ -12,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.infrastructure.persistence.models import User
 from app.modules.auth.schemas import AuthenticatedUser
+
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
@@ -63,6 +67,23 @@ class AuthService:
             firebase_app = self._get_firebase_app()
             decoded_token = firebase_auth.verify_id_token(token, app=firebase_app)
         except Exception as exc:
+            logger.error(
+                "firebase_verify_failed",
+                extra={
+                    "exc_type": type(exc).__name__,
+                    "exc_msg": str(exc),
+                    "firebase_project_id": self.settings.FIREBASE_PROJECT_ID,
+                    "firebase_client_email": self.settings.FIREBASE_CLIENT_EMAIL,
+                    "firebase_credentials_file": self.settings.FIREBASE_CREDENTIALS_FILE or "(none - using env vars)",
+                    "google_app_creds_env": os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "(not set)"),
+                    "private_key_starts_with": (
+                        self.settings.firebase_private_key_multiline[:40]
+                        if self.settings.firebase_private_key_multiline
+                        else "(empty)"
+                    ),
+                },
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired Firebase token",
