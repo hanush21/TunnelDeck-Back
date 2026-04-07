@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.core.schemas import PaginationMeta
+
 
 class PublishedPort(BaseModel):
     container_port: str
@@ -25,4 +27,5 @@ class ContainerSummaryResponse(BaseModel):
 
 
 class ContainerListResponse(BaseModel):
+    meta: PaginationMeta
     items: list[ContainerSummaryResponse]

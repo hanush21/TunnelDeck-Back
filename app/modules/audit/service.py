@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.persistence.models import AuditLog
@@ -31,6 +31,15 @@ class AuditService:
         db.add(entry)
         db.flush()
 
-    def list_entries(self, db: Session, *, limit: int = 100) -> list[AuditLog]:
-        stmt = select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit)
+    def count_entries(self, db: Session) -> int:
+        stmt = select(func.count()).select_from(AuditLog)
+        return int(db.scalar(stmt) or 0)
+
+    def list_entries(self, db: Session, *, limit: int = 100, offset: int = 0) -> list[AuditLog]:
+        stmt = (
+            select(AuditLog)
+            .order_by(desc(AuditLog.created_at), desc(AuditLog.id))
+            .limit(limit)
+            .offset(offset)
+        )
         return list(db.scalars(stmt).all())

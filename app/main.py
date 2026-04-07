@@ -5,7 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import get_settings
+from app.core.error_handlers import register_exception_handlers
+from app.core.hardening import run_startup_hardening_checks
 from app.core.logging import configure_logging
+from app.core.middleware import RequestContextMiddleware
 from app.infrastructure.persistence.database import init_db
 
 
@@ -23,6 +26,8 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if docs_enabled else None,
     )
 
+    app.add_middleware(RequestContextMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
@@ -31,11 +36,13 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-TOTP-Code"],
     )
 
+    register_exception_handlers(app)
     app.include_router(api_router)
 
     @app.on_event("startup")
     def on_startup() -> None:
         init_db()
+        run_startup_hardening_checks(settings)
 
     return app
 

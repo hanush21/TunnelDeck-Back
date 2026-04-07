@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.persistence.models import Exposure, ServiceType
@@ -15,8 +15,17 @@ class ExposureService:
         self.tunnel_service = tunnel_service
         self.docker_service = docker_service
 
-    def list_exposures(self, db: Session) -> list[Exposure]:
-        stmt = select(Exposure).order_by(Exposure.created_at.desc())
+    def count_exposures(self, db: Session) -> int:
+        stmt = select(func.count()).select_from(Exposure)
+        return int(db.scalar(stmt) or 0)
+
+    def list_exposures(self, db: Session, *, limit: int = 100, offset: int = 0) -> list[Exposure]:
+        stmt = (
+            select(Exposure)
+            .order_by(Exposure.created_at.desc(), Exposure.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         return list(db.scalars(stmt).all())
 
     def _get_by_id(self, db: Session, exposure_id: int) -> Exposure:

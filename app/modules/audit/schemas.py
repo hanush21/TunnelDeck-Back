@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.core.schemas import PaginationMeta
+
 
 class AuditLogResponse(BaseModel):
     id: int
@@ -18,4 +20,5 @@ class AuditLogResponse(BaseModel):
 
 
 class AuditListResponse(BaseModel):
+    meta: PaginationMeta
     entries: list[AuditLogResponse]

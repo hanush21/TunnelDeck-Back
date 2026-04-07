@@ -1,63 +1,79 @@
-# TunnelDeck API Contract (MVP)
+# TunnelDeck API Contract (V1 Stable)
 
 Base URL: `/api/v1`
 
-## Security Contract
+## Headers
 
-### Headers
-- Protected endpoints require:
-  - `Authorization: Bearer <firebase_id_token>`
-- Sensitive mutation endpoints additionally require:
-  - `X-TOTP-Code: <6-digit-code>`
+### Required on protected endpoints
+- `Authorization: Bearer <firebase_id_token>`
 
-### Protected (read) endpoints
-- `GET /health/cloudflared`
-- `GET /auth/me`
-- `GET /dashboard/summary`
-- `GET /containers`
-- `GET /containers/{container_id}`
-- `GET /exposures`
-- `GET /audit`
-- `POST /security/verify-totp`
+### Required on sensitive mutations
+- `X-TOTP-Code: <6-digit-code>`
 
-### Sensitive mutation endpoints (Auth + TOTP)
-- `POST /exposures`
-- `PUT /exposures/{exposure_id}`
-- `DELETE /exposures/{exposure_id}`
+### Returned on every response
+- `X-Request-ID: <uuid>`
 
-## Common Error Responses
-- `401 Unauthorized`
-  - `{"detail": "Missing bearer token"}`
-  - `{"detail": "Invalid or expired Firebase token"}`
-  - `{"detail": "Firebase token missing required claims"}`
-- `403 Forbidden`
-  - `{"detail": "User is not in admin allowlist"}`
-  - `{"detail": "Missing X-TOTP-Code header"}`
-  - `{"detail": "TOTP code must be 6 digits"}`
-  - `{"detail": "Invalid TOTP code"}`
-  - `{"detail": "No TOTP secret configured for admin"}`
-- `422 Unprocessable Entity` (validation errors / invalid parameters)
-- `500 Internal Server Error` in controlled failure paths for tunnel/exposure operations
+## Error Contract
+
+All non-2xx responses use this envelope:
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Request validation failed",
+    "details": null,
+    "request_id": "c99713f5-1aa7-4fa6-a12f-2f0d6dc0d6b8"
+  }
+}
+```
+
+Common `error.code` values:
+- `unauthorized`, `forbidden`, `not_found`, `conflict`, `validation_error`
+- `resource_locked` (HTTP 423)
+- `rate_limit_exceeded` (HTTP 429)
+- `service_unavailable`, `internal_error`
+
+Rate-limited responses include:
+- `Retry-After: <seconds>`
 
 ## Endpoints
 
-### 1) Health
+### Health
+- `GET /health` (public)
+- `GET /health/live` (public)
+- `GET /health/ready` (public)
+- `GET /health/cloudflared` (protected)
+- `POST /health/cloudflared/restart` (protected + TOTP)
 
-#### `GET /health`
-Auth: No
-
-Response `200`:
+#### `GET /health/live` response
 ```json
 {
-  "status": "ok",
+  "status": "alive",
   "timestamp": "2026-04-07T10:15:30.123456+00:00"
 }
 ```
 
-#### `GET /health/cloudflared`
-Auth: Bearer
+#### `GET /health/ready` response
+```json
+{
+  "ready": true,
+  "status": "ready",
+  "timestamp": "2026-04-07T10:15:30.123456+00:00",
+  "components": {
+    "database": { "ready": true, "status": "ok" },
+    "docker": { "ready": false, "status": "degraded", "detail": "..." },
+    "cloudflared": {
+      "ready": false,
+      "status": "not_found",
+      "service_manager": "launchctl",
+      "platform_system": "darwin"
+    }
+  }
+}
+```
 
-Response `200`:
+#### `POST /health/cloudflared/restart` response
 ```json
 {
   "service_name": "cloudflared",
@@ -70,53 +86,24 @@ Response `200`:
 }
 ```
 
-### 2) Auth
+### Auth
+- `GET /auth/me` (protected)
 
-#### `GET /auth/me`
-Auth: Bearer
+### Dashboard
+- `GET /dashboard/summary` (protected)
 
-Response `200`:
+### Containers
+- `GET /containers?limit=100&offset=0` (protected)
+- `GET /containers/{container_id}` (protected)
+
+`GET /containers` response:
 ```json
 {
-  "uid": "firebase-uid",
-  "email": "admin@example.com",
-  "name": "Admin Name"
-}
-```
-
-### 3) Dashboard
-
-#### `GET /dashboard/summary`
-Auth: Bearer
-
-Response `200`:
-```json
-{
-  "exposures": {
-    "total": 3,
-    "enabled": 2
+  "meta": {
+    "total": 42,
+    "limit": 100,
+    "offset": 0
   },
-  "containers": {
-    "total": 10,
-    "running": 7
-  },
-  "cloudflared": {
-    "service_name": "cloudflared",
-    "status": "active",
-    "is_active": true,
-    "config_exists": true
-  }
-}
-```
-
-### 4) Containers
-
-#### `GET /containers`
-Auth: Bearer
-
-Response `200`:
-```json
-{
   "items": [
     {
       "id": "d1e2f3",
@@ -131,12 +118,8 @@ Response `200`:
           "host_port": "8080"
         }
       ],
-      "labels": {
-        "com.docker.compose.service": "web"
-      },
-      "networks": [
-        "bridge"
-      ],
+      "labels": {"com.docker.compose.service": "web"},
+      "networks": ["bridge"],
       "created_at": "2026-04-07T10:15:30+00:00",
       "started_at": "2026-04-07T10:20:00+00:00"
     }
@@ -144,24 +127,13 @@ Response `200`:
 }
 ```
 
-Possible errors:
-- `503` Docker unavailable
+### Exposures
+- `GET /exposures?limit=100&offset=0` (protected)
+- `POST /exposures` (protected + TOTP)
+- `PUT /exposures/{exposure_id}` (protected + TOTP)
+- `DELETE /exposures/{exposure_id}` (protected + TOTP)
 
-#### `GET /containers/{container_id}`
-Auth: Bearer
-
-Path params:
-- `container_id` (string)
-
-Response `200`: same object shape as each `items[]` entry above.
-
-Possible errors:
-- `404` container not found
-- `503` Docker unavailable
-
-### 5) Exposures
-
-## Exposure payload schema
+Exposure payload:
 ```json
 {
   "container_name": "my-service",
@@ -173,34 +145,14 @@ Possible errors:
 }
 ```
 
-Rules:
-- `service_type`: `http` | `https`
-- `target_port`: 1..65535
-- `hostname`: valid FQDN, normalized to lowercase
-- `target_host`: no scheme, no path (`localhost`, `127.0.0.1`, etc.)
-
-## Exposure response object
+`GET /exposures` response:
 ```json
 {
-  "id": 1,
-  "container_name": "my-service",
-  "hostname": "app.example.com",
-  "service_type": "http",
-  "target_host": "localhost",
-  "target_port": 3000,
-  "enabled": true,
-  "created_by": "admin@example.com",
-  "created_at": "2026-04-07T10:15:30",
-  "updated_at": "2026-04-07T10:15:30"
-}
-```
-
-#### `GET /exposures`
-Auth: Bearer
-
-Response `200`:
-```json
-{
+  "meta": {
+    "total": 3,
+    "limit": 100,
+    "offset": 0
+  },
   "items": [
     {
       "id": 1,
@@ -218,76 +170,36 @@ Response `200`:
 }
 ```
 
-#### `POST /exposures`
-Auth: Bearer + `X-TOTP-Code`
+`DELETE /exposures/{id}` returns `204` with empty body.
 
-Body: Exposure payload schema
+### Security
+- `POST /security/verify-totp` (protected)
 
-Response `201`: Exposure response object
-
-Possible errors:
-- `403` missing/invalid TOTP
-- `409` hostname exists
-- `422` container missing or validation fails
-- `500` tunnel/config apply failure
-
-#### `PUT /exposures/{exposure_id}`
-Auth: Bearer + `X-TOTP-Code`
-
-Body: Exposure payload schema
-
-Response `200`: Exposure response object
-
-Possible errors:
-- `403` missing/invalid TOTP
-- `404` exposure not found
-- `409` hostname exists
-- `422` validation/container missing
-- `500` tunnel/config apply failure
-
-#### `DELETE /exposures/{exposure_id}`
-Auth: Bearer + `X-TOTP-Code`
-
-Response `204`: empty body
-
-Possible errors:
-- `403` missing/invalid TOTP
-- `404` exposure not found
-- `500` tunnel/config apply failure
-
-### 6) Security
-
-#### `POST /security/verify-totp`
-Auth: Bearer
-
-Body:
+Request:
 ```json
 {
   "code": "123456"
 }
 ```
 
-Response `200`:
+Response:
 ```json
 {
   "valid": true
 }
 ```
 
-Possible errors:
-- `403` invalid/missing/not-configured TOTP
+### Audit
+- `GET /audit?limit=100&offset=0` (protected)
 
-### 7) Audit
-
-#### `GET /audit?limit=100`
-Auth: Bearer
-
-Query params:
-- `limit` integer, min `1`, max `500`, default `100`
-
-Response `200`:
+Response:
 ```json
 {
+  "meta": {
+    "total": 120,
+    "limit": 100,
+    "offset": 0
+  },
   "entries": [
     {
       "id": 10,
@@ -297,7 +209,8 @@ Response `200`:
       "resource_id": "1",
       "success": true,
       "details": {
-        "hostname": "app.example.com"
+        "hostname": "app.example.com",
+        "request_id": "c99713f5-1aa7-4fa6-a12f-2f0d6dc0d6b8"
       },
       "error_message": null,
       "created_at": "2026-04-07T10:15:30"
@@ -306,8 +219,8 @@ Response `200`:
 }
 ```
 
-## Notes for Frontend
-- No wildcard CORS in production.
-- Mutations must always send `X-TOTP-Code`.
-- Backend is source of truth for validation; frontend validations are UX-only.
-- For `DELETE /exposures/{id}`, expect `204` with empty response body.
+## Frontend Notes
+- Keep using existing success payloads; only list endpoints gained `meta`.
+- Always read and log `X-Request-ID` for support/debug traces.
+- For sensitive mutations, send `X-TOTP-Code` on every request.
+- `POST /health/cloudflared/restart` is optional for UI; no required frontend changes if you do not expose a manual restart button.

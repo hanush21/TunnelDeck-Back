@@ -9,3 +9,5 @@ docker==7.1.0
 cryptography==46.0.2
 pytest==8.4.2
 httpx==0.28.1
+filelock==3.18.0
+alembic==1.16.5

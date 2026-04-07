@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.routes.audit import get_audit_service
 from app.api.routes.containers import get_docker_service
 from app.api.routes.health import get_tunnel_service
+from app.core.schemas import PaginationMeta
 from app.core.dependencies import get_current_admin_user, get_current_admin_with_totp, get_db
 from app.modules.audit.service import AuditService
 from app.modules.auth.schemas import AuthenticatedUser
@@ -63,15 +64,22 @@ def list_exposures(
     _: Annotated[AuthenticatedUser, Depends(get_current_admin_user)],
     db: Annotated[Session, Depends(get_db)],
     exposure_service: Annotated[ExposureService, Depends(get_exposure_service)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> ExposureListResponse:
-    exposures = exposure_service.list_exposures(db)
+    total = exposure_service.count_exposures(db)
+    exposures = exposure_service.list_exposures(db, limit=limit, offset=offset)
     items = [ExposureResponse.model_validate(exposure, from_attributes=True) for exposure in exposures]
-    return ExposureListResponse(items=items)
+    return ExposureListResponse(
+        meta=PaginationMeta(total=total, limit=limit, offset=offset),
+        items=items,
+    )
 
 
 @router.post("", response_model=ExposureResponse, status_code=status.HTTP_201_CREATED)
 def create_exposure(
     payload: ExposureCreateRequest,
+    request: Request,
     user: Annotated[AuthenticatedUser, Depends(get_current_admin_with_totp)],
     db: Annotated[Session, Depends(get_db)],
     exposure_service: Annotated[ExposureService, Depends(get_exposure_service)],
@@ -86,7 +94,10 @@ def create_exposure(
             resource_type="exposure",
             resource_id=str(exposure.id),
             success=True,
-            details={"hostname": exposure.hostname},
+            details={
+                "hostname": exposure.hostname,
+                "request_id": getattr(request.state, "request_id", None),
+            },
         )
         db.commit()
         db.refresh(exposure)
@@ -100,7 +111,10 @@ def create_exposure(
             action="exposure.create",
             resource_id=None,
             success=False,
-            details={"hostname": payload.hostname},
+            details={
+                "hostname": payload.hostname,
+                "request_id": getattr(request.state, "request_id", None),
+            },
             error_message=str(exc.detail),
         )
         raise
@@ -113,7 +127,10 @@ def create_exposure(
             action="exposure.create",
             resource_id=None,
             success=False,
-            details={"hostname": payload.hostname},
+            details={
+                "hostname": payload.hostname,
+                "request_id": getattr(request.state, "request_id", None),
+            },
             error_message=str(exc),
         )
         raise HTTPException(status_code=500, detail="Failed to create exposure") from exc
@@ -123,6 +140,7 @@ def create_exposure(
 def update_exposure(
     exposure_id: int,
     payload: ExposureUpdateRequest,
+    request: Request,
     user: Annotated[AuthenticatedUser, Depends(get_current_admin_with_totp)],
     db: Annotated[Session, Depends(get_db)],
     exposure_service: Annotated[ExposureService, Depends(get_exposure_service)],
@@ -142,7 +160,10 @@ def update_exposure(
             resource_type="exposure",
             resource_id=str(exposure.id),
             success=True,
-            details={"hostname": exposure.hostname},
+            details={
+                "hostname": exposure.hostname,
+                "request_id": getattr(request.state, "request_id", None),
+            },
         )
         db.commit()
         db.refresh(exposure)
@@ -156,7 +177,10 @@ def update_exposure(
             action="exposure.update",
             resource_id=str(exposure_id),
             success=False,
-            details={"hostname": payload.hostname},
+            details={
+                "hostname": payload.hostname,
+                "request_id": getattr(request.state, "request_id", None),
+            },
             error_message=str(exc.detail),
         )
         raise
@@ -169,7 +193,10 @@ def update_exposure(
             action="exposure.update",
             resource_id=str(exposure_id),
             success=False,
-            details={"hostname": payload.hostname},
+            details={
+                "hostname": payload.hostname,
+                "request_id": getattr(request.state, "request_id", None),
+            },
             error_message=str(exc),
         )
         raise HTTPException(status_code=500, detail="Failed to update exposure") from exc
@@ -182,6 +209,7 @@ def update_exposure(
 )
 def delete_exposure(
     exposure_id: int,
+    request: Request,
     user: Annotated[AuthenticatedUser, Depends(get_current_admin_with_totp)],
     db: Annotated[Session, Depends(get_db)],
     exposure_service: Annotated[ExposureService, Depends(get_exposure_service)],
@@ -196,7 +224,10 @@ def delete_exposure(
             resource_type="exposure",
             resource_id=str(exposure_id),
             success=True,
-            details={"exposure_id": exposure_id},
+            details={
+                "exposure_id": exposure_id,
+                "request_id": getattr(request.state, "request_id", None),
+            },
         )
         db.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -209,7 +240,10 @@ def delete_exposure(
             action="exposure.delete",
             resource_id=str(exposure_id),
             success=False,
-            details={"exposure_id": exposure_id},
+            details={
+                "exposure_id": exposure_id,
+                "request_id": getattr(request.state, "request_id", None),
+            },
             error_message=str(exc.detail),
         )
         raise
@@ -222,7 +256,10 @@ def delete_exposure(
             action="exposure.delete",
             resource_id=str(exposure_id),
             success=False,
-            details={"exposure_id": exposure_id},
+            details={
+                "exposure_id": exposure_id,
+                "request_id": getattr(request.state, "request_id", None),
+            },
             error_message=str(exc),
         )
         raise HTTPException(status_code=500, detail="Failed to delete exposure") from exc

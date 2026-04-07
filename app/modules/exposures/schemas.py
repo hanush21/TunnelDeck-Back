@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.schemas import PaginationMeta
 from app.infrastructure.tunnel.validator import validate_hostname
 
 
@@ -54,4 +55,5 @@ class ExposureResponse(BaseModel):
 
 
 class ExposureListResponse(BaseModel):
+    meta: PaginationMeta
     items: list[ExposureResponse]
