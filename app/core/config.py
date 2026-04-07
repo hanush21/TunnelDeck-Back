@@ -69,7 +69,14 @@ class Settings(BaseSettings):
 
     @property
     def firebase_private_key_multiline(self) -> str:
-        return self.FIREBASE_PRIVATE_KEY.replace("\\n", "\n")
+        # Handles both single-escaped (\n) and double-escaped (\\n) newlines,
+        # which can happen depending on how the env var is set in Docker/Coolify.
+        key = self.FIREBASE_PRIVATE_KEY
+        if "\\\\n" in key:
+            key = key.replace("\\\\n", "\n")
+        elif "\\n" in key:
+            key = key.replace("\\n", "\n")
+        return key
 
     @model_validator(mode="after")
     def validate_security_requirements(self) -> "Settings":
