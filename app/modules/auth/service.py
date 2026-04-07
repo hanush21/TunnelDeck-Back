@@ -68,8 +68,8 @@ class AuthService:
             decoded_token = firebase_auth.verify_id_token(token, app=firebase_app)
         except Exception as exc:
             logger.error(
-                "firebase_verify_failed",
-                extra={
+                {
+                    "event": "firebase_verify_failed",
                     "exc_type": type(exc).__name__,
                     "exc_msg": str(exc),
                     "firebase_project_id": self.settings.FIREBASE_PROJECT_ID,
@@ -81,8 +81,7 @@ class AuthService:
                         if self.settings.firebase_private_key_multiline
                         else "(empty)"
                     ),
-                },
-                exc_info=True,
+                }
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
