@@ -1,9 +1,9 @@
 # TunnelDeck Backend Context
 
-Last update: 2026-04-07
+Last update: 2026-04-17
 
 ## Project Status
-Backend MVP is implemented and runnable.
+Backend MVP implemented and runnable. Two recent tunnel config improvements applied.
 
 Reference API contract for frontend integration:
 - `docs/API_CONTRACT.md`
@@ -55,12 +55,18 @@ Reference API contract for frontend integration:
   - explicit protected cloudflared restart endpoint (`POST /health/cloudflared/restart`)
   - manual backup restore support through CLI (`list-config-backups`, `restore-config-backup`)
   - restore CLI writes audit logs (`cloudflared.restore_backup`) for success/failure
-  - platform-aware service manager support to avoid crashes on non-Linux hosts:
+  - platform-aware service manager support:
     - Linux: `systemctl`
     - macOS: `launchctl`
     - Windows: `sc`
-    - Docker mode for containerized deployments (`CLOUDFLARED_CONTROL_MODE=docker`)
+    - Docker mode (`CLOUDFLARED_CONTROL_MODE=docker`)
   - rollback on failure
+  - **[NEW] External entry preservation**: on every config write, entries in config.yml whose
+    hostnames are NOT in the DB are kept as-is (order: external first, DB entries, fallback 404).
+    Entries with non-http/https service schemes (e.g. unix sockets) are always preserved untouched.
+  - **[NEW] Auto-import from config**: on every exposure create/update/delete, entries in
+    config.yml not yet in DB are automatically imported as Exposure records (http/https only).
+    `container_name` defaults to `target_host` (editable after import). Import is idempotent.
 - Audit module:
   - write audit logs for security and exposure actions
   - list audit entries
@@ -84,8 +90,8 @@ Reference API contract for frontend integration:
 
 ### Testing and tooling
 - Unit tests and API integration tests (`TestClient` + mocks for Firebase/Docker/service manager).
-- Current test status: passing locally (`27 passed`).
-- Project files added:
+- Current test status: passing locally (`27 passed`) — **tests not yet updated for auto-import**.
+- Project files:
   - `requirements.txt`
   - `.env.example`
   - `README.md`
@@ -93,12 +99,27 @@ Reference API contract for frontend integration:
   - `.gitignore`
 
 ## Partially Implemented / Pending
-- Cross-platform service control is best-effort:
-  - Linux: expected production path (`systemctl`).
-  - macOS/Windows: health works and no crash, but service lifecycle behavior depends on local service registration (`launchctl`/`sc`).
-- In container-first deployments (Coolify standard Docker runtime), cloudflared restart operations can be unavailable if no supported service manager exists inside container.
-- Coolify-ready path is now documented and supported through Docker control mode plus shared config volume.
-- Metrics endpoint/exporter (Prometheus) is not implemented (logging-only observability in v1).
+
+### Tests missing for recent changes
+- No tests for `TunnelService.import_external_config_entries`.
+- No tests for external entry preservation in `apply_exposure_config`.
+
+### Missing endpoint
+- No `POST /api/v1/exposures/sync-from-config` endpoint to trigger import on demand
+  (currently import only fires as a side-effect of create/update/delete).
+
+### Auto-import limitations
+- `container_name` for imported entries defaults to `target_host` — requires manual edit after import.
+- No audit log entry written for auto-imported exposures.
+- Non-http/https ingress entries (unix sockets, etc.) are preserved in config but never importable.
+
+### Platform notes
+- macOS/Windows service lifecycle depends on local service registration (`launchctl`/`sc`).
+- In container-first deployments (Coolify standard Docker runtime), cloudflared restart can be
+  unavailable if no supported service manager exists inside container.
+
+### Observability
+- Metrics endpoint/exporter (Prometheus) not implemented (logging-only in v1).
 
 ## Out Of Scope (Still Not Implemented)
 - Creating admins from UI
@@ -110,22 +131,16 @@ Reference API contract for frontend integration:
 
 ## Operational Notes
 - `.env` must be at project root (`./.env`), not inside `.venv/`.
-- Required env variables are documented in `.env.example`.
+- Required env variables documented in `.env.example`.
 - `FIREBASE_PRIVATE_KEY` in `.env` must end with `"` and must not have a trailing comma.
 - Dashboard depends on both Docker and cloudflared health checks:
-  - Docker daemon unavailable -> `503`.
-  - cloudflared service manager unavailable/missing -> no crash; health returns degraded status.
+  - Docker daemon unavailable → `503`.
+  - cloudflared service manager unavailable/missing → no crash; health returns degraded status.
 
 ## Session Notes (2026-04-07)
 - Fixed `.env` parsing issue (`python-dotenv`) caused by malformed `FIREBASE_PRIVATE_KEY` line.
 - Added platform-aware cloudflared service controller to avoid `systemctl` crash on macOS.
-- Extended `/api/v1/health/cloudflared` response with:
-  - `platform_system`
-  - `os_name`
-  - `service_manager`
-- Updated docs:
-  - `README.md` with full setup/troubleshooting
-  - `docs/API_CONTRACT.md` with updated cloudflared health response fields
+- Extended `/api/v1/health/cloudflared` response with `platform_system`, `os_name`, `service_manager`.
 - Implemented stability bundle:
   - tunnel config file lock + semantic `423` on lock timeout
   - error envelope + global exception handlers + request correlation header
@@ -136,16 +151,18 @@ Reference API contract for frontend integration:
 - Added v1 stabilization items:
   - Alembic setup (`alembic.ini`, `alembic/`, initial migration `20260407_01`)
   - manual cloudflared restart endpoint (`POST /api/v1/health/cloudflared/restart`) with TOTP + audit
-  - manual backup operations via CLI:
-    - `python manage.py list-config-backups`
-    - `python manage.py restore-config-backup --backup-id <id> --actor-email <email>`
-  - management commands for migrations:
-    - `python manage.py migrate`
-    - `python manage.py makemigration -m \"...\"`
-    - `python manage.py downgrade --revision <rev>`
-    - `python manage.py stamp --revision head`
+  - management commands: `migrate`, `makemigration`, `downgrade`, `stamp`
   - expanded tests (`27 passed`)
 - Coolify/container hardening:
-  - cloudflared control mode now supports Docker (`CLOUDFLARED_CONTROL_MODE=docker`)
-  - cloudflared container target configurable (`CLOUDFLARED_DOCKER_CONTAINER_NAME`)
+  - Docker control mode (`CLOUDFLARED_CONTROL_MODE=docker`)
+  - configurable container target (`CLOUDFLARED_DOCKER_CONTAINER_NAME`)
   - Dockerfile defaults tuned for container deployment (`/data` sqlite + `/data/cloudflared/config.yml`)
+
+## Session Notes (2026-04-17)
+- Tunnel config write logic changed from full-overwrite to merge:
+  - External entries (hostnames not in DB) preserved first in ingress order.
+  - Non-http/https entries always preserved unchanged.
+  - Config-missing case now starts from scratch instead of crashing.
+- Auto-import added: on each exposure mutation, `TunnelService.import_external_config_entries`
+  reads config.yml and creates DB records for untracked http/https entries.
+  Entry `container_name` defaults to `target_host` as editable placeholder.

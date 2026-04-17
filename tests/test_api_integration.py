@@ -109,6 +109,14 @@ class FakeTunnelService:
             "service_manager": "systemd",
         }
 
+    def import_external_config_entries(
+        self,
+        db: Session,
+        *,
+        actor_email: str,
+    ) -> list:
+        return []
+
     def apply_exposure_config(
         self,
         db: Session,
