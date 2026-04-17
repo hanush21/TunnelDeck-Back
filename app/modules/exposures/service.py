@@ -45,6 +45,8 @@ class ExposureService:
             )
 
     def _sync_tunnel(self, db: Session, *, actor_email: str, reason: str) -> None:
+        self.tunnel_service.import_external_config_entries(db, actor_email=actor_email)
+
         enabled_stmt = (
             select(Exposure)
             .where(Exposure.enabled.is_(True))

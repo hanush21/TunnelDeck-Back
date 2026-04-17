@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
 from filelock import FileLock, Timeout
@@ -9,7 +10,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.infrastructure.persistence.models import ConfigBackup, Exposure
+from app.infrastructure.persistence.models import ConfigBackup, Exposure, ServiceType
 from app.infrastructure.tunnel.backup import BackupManager
 from app.infrastructure.tunnel.systemd import CloudflaredSystemdController
 from app.infrastructure.tunnel.validator import (
@@ -194,7 +195,53 @@ class TunnelService:
                 },
             ) from exc
 
-    def _build_ingress_from_exposures(self, exposures: list[Exposure]) -> list[dict]:
+    def import_external_config_entries(
+        self, db: Session, *, actor_email: str
+    ) -> list[Exposure]:
+        """Parse config.yml, create Exposure records for hostnames not already in DB."""
+        try:
+            current_config = self.yaml_manager.load(self.settings.CLOUDFLARED_CONFIG_PATH)
+        except FileNotFoundError:
+            return []
+
+        existing_ingress = current_config.get("ingress") or []
+        if not existing_ingress:
+            return []
+
+        existing_hostnames: set[str] = set(
+            db.scalars(select(Exposure.hostname)).all()
+        )
+
+        imported: list[Exposure] = []
+        for entry in existing_ingress:
+            hostname = entry.get("hostname")
+            service = entry.get("service")
+            if not hostname or not service or hostname in existing_hostnames:
+                continue
+
+            parsed = urlparse(service)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
+                continue
+
+            exposure = Exposure(
+                container_name=parsed.hostname,
+                hostname=hostname,
+                service_type=ServiceType(parsed.scheme),
+                target_host=parsed.hostname,
+                target_port=parsed.port,
+                enabled=True,
+                created_by=actor_email,
+            )
+            db.add(exposure)
+            existing_hostnames.add(hostname)
+            imported.append(exposure)
+
+        if imported:
+            db.flush()
+
+        return imported
+
+    def _build_db_ingress_entries(self, exposures: list[Exposure]) -> list[dict]:
         ingress: list[dict] = []
         for exposure in exposures:
             service_url = build_service_url(
@@ -208,10 +255,16 @@ class TunnelService:
                     "service": service_url,
                 }
             )
-
-        ingress.append({"service": "http_status:404"})
-        validate_ingress(ingress)
         return ingress
+
+    def _extract_external_ingress(
+        self, current_ingress: list[dict], db_hostnames: set[str]
+    ) -> list[dict]:
+        return [
+            entry
+            for entry in current_ingress
+            if entry.get("hostname") and entry["hostname"] not in db_hostnames
+        ]
 
     def apply_exposure_config(
         self,
@@ -226,8 +279,17 @@ class TunnelService:
                 str(self.lock_path),
                 timeout=self.settings.TUNNEL_CONFIG_LOCK_TIMEOUT_SECONDS,
             ):
-                current_config = self.yaml_manager.load(self.settings.CLOUDFLARED_CONFIG_PATH)
-                ingress = self._build_ingress_from_exposures(exposures)
+                try:
+                    current_config = self.yaml_manager.load(self.settings.CLOUDFLARED_CONFIG_PATH)
+                except FileNotFoundError:
+                    current_config = {}
+
+                db_hostnames = {e.hostname for e in exposures}
+                existing_ingress = current_config.get("ingress") or []
+                external_entries = self._extract_external_ingress(existing_ingress, db_hostnames)
+                db_entries = self._build_db_ingress_entries(exposures)
+                ingress = external_entries + db_entries + [{"service": "http_status:404"}]
+                validate_ingress(ingress)
 
                 updated_config = dict(current_config)
                 updated_config["ingress"] = ingress
